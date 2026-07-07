@@ -1,33 +1,9 @@
-import Bytez from 'bytez.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import redisClient from '../redisClient.js';
 import crypto from 'crypto';
 
-const sdk = new Bytez();
-const model = sdk.model('mohsenfayyaz/toxicity-classifier');
-
-const MAX_RETRIES = 5;
-let lastBytezCall = Promise.resolve();
-
-async function runModelWithRetry(text, retries = 0) {
-  lastBytezCall = lastBytezCall.then(() => attemptRun(text, retries));
-  return lastBytezCall;
-}
-
-async function attemptRun(text, retries) {
-  try {
-    const { error, output } = await model.run({ text });
-    if (error) throw new Error(error);
-    return output;
-  } catch (err) {
-    const msg = (err && err.message) || (typeof err === 'string' ? err : 'Unknown error');
-    if (msg.includes('your plan allows for 1 concurrency') && retries < MAX_RETRIES) {
-      const backoff = Math.pow(2, retries) * 200;
-      await new Promise(res => setTimeout(res, backoff));
-      return attemptRun(text, retries + 1);
-    }
-    throw err;
-  }
-}
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 export const analyzeComments = async (req, res) => {
   let { commentText } = req.body;
@@ -42,29 +18,33 @@ export const analyzeComments = async (req, res) => {
     if (cachedResult) {
       return res.json(JSON.parse(cachedResult));
     }
-    const output = await runModelWithRetry(commentText);
+    
+    const prompt = `Analyze the following comment for toxicity, harassment, and unsafe content. 
+Return a JSON object with:
+- "rating": a number from 1 to 10 (1 = completely safe, 10 = highly toxic)
+- "message": a brief explanation
+- "toxic": boolean (true if toxic, false otherwise)
+Text to analyze: "${commentText}"`;
 
-    let maxScore = 0;
-    if (Array.isArray(output)) {
-      for (const item of output) {
-        if (item.label?.toLowerCase() === 'toxic' && typeof item.score === 'number') {
-          maxScore = Math.max(maxScore, item.score);
-        }
-      }
-    } else if (output && output.label?.toLowerCase() === 'toxic' && typeof output.score === 'number') {
-      maxScore = output.score;
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
+    let parsedData;
+    try {
+      parsedData = JSON.parse(jsonMatch[1].trim());
+    } catch (e) {
+      parsedData = { rating: 1, message: 'Content seems normal', toxic: false };
     }
 
-    const rating = Math.max(1, Math.round(maxScore * 10));
-    const result = {
-      rating,
-      message: rating > 7 ? 'Potential toxicity detected' : 'Comment seems normal',
-      output,
+    const finalResult = {
+      rating: parsedData.rating || 1,
+      message: parsedData.message || (parsedData.rating > 7 ? 'Potential toxicity detected' : 'Comment seems normal'),
+      output: parsedData,
     };
 
-    await redisClient.set(cacheKey, JSON.stringify(result), { EX: 300 });
+    await redisClient.set(cacheKey, JSON.stringify(finalResult), { EX: 300 });
 
-    return res.json(result);
+    return res.json(finalResult);
   } catch (err) {
     console.error('Error in analyzeComment:', err);
     return res.status(500).json({ error: err.message || 'Internal error' });

@@ -1,42 +1,14 @@
-import Bytez from 'bytez.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import redisClient from '../redisClient.js';
 import crypto from 'crypto';
 import dotenv from 'dotenv'
 
 dotenv.config({
   path:'./.env'
-}
-)
-// console.log(process.env.Bytez_Key)
-const sdk = new Bytez(process.env.Bytez_Key);
-const model = sdk.model('mohsenfayyaz/toxicity-classifier');
+})
 
-const MAX_RETRIES = 5;
-let lastBytezCall = Promise.resolve();
-
-async function runModelWithRetry(text, retries = 0) {
-  lastBytezCall = lastBytezCall.then(() => attemptRun(text, retries));
-  return lastBytezCall;
-}
-
-async function attemptRun(text, retries) {
-  try {
-    // Pass an object { text } as required by Bytez API
-    const { error, output } = await model.run({ text });
-    if (error) throw new Error(error);
-    return output;
-  } catch (err) {
-    const msg = (err && err.message) || (typeof err === 'string' ? err : 'Unknown error');
-    if (msg.includes('your plan allows for 1 concurrency') && retries < MAX_RETRIES) {
-      const backoff = Math.pow(2, retries) * 200;
-      console.warn(`Bytez concurrency limit hit. Retry #${retries + 1} in ${backoff}ms`);
-      await new Promise(res => setTimeout(res, backoff));
-      return attemptRun(text, retries + 1);
-    }
-    console.error('Bytez error:', err);
-    throw err;
-  }
-}
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
 const analyzeComment = async (req, res) => {
   let { text } = req.body;
@@ -45,7 +17,7 @@ const analyzeComment = async (req, res) => {
     return res.status(400).json({ error: 'Valid text is required' });
   }
 
-  // Normalize text to avoid encoding issues (important for emails)
+  // Normalize text to avoid encoding issues
   text = text.normalize('NFC').trim();
 
   console.log('Received moderation request:', text);
@@ -60,34 +32,36 @@ const analyzeComment = async (req, res) => {
       return res.json(JSON.parse(cachedResult));
     }
 
-    console.log('Cache miss. Calling Bytez...');
-    const output = await runModelWithRetry(text);
-    console.log('Received output from Bytez:', output);
+    console.log('Cache miss. Calling Gemini...');
+    
+    const prompt = `Analyze the following text for toxicity, harassment, and unsafe content. 
+Return a JSON object with:
+- "rating": a number from 1 to 10 (1 = completely safe, 10 = highly toxic)
+- "message": a brief explanation
+- "toxic": boolean (true if toxic, false otherwise)
+Text to analyze: "${text}"`;
 
-    // Handle output as array or single object safely
-    let maxScore = 0;
-    if (Array.isArray(output)) {
-      output.forEach(item => {
-        if (item.label?.toLowerCase() === 'toxic' && typeof item.score === 'number') {
-          maxScore = Math.max(maxScore, item.score);
-        }
-      });
-    } else if (output && output.label?.toLowerCase() === 'toxic' && typeof output.score === 'number') {
-      maxScore = output.score;
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
+    let parsedData;
+    try {
+      parsedData = JSON.parse(jsonMatch[1].trim());
+    } catch (e) {
+      parsedData = { rating: 1, message: 'Content seems normal', toxic: false };
     }
 
-    const rating = Math.max(1, Math.round(maxScore * 10));
-    const result = {
-      rating,
-      message: rating > 7 ? 'Something fishy detected' : 'Content seems normal',
-      output,
+    const finalResult = {
+      rating: parsedData.rating || 1,
+      message: parsedData.message || (parsedData.rating > 7 ? 'Something fishy detected' : 'Content seems normal'),
+      output: parsedData,
     };
 
     console.log('Caching result in Redis...');
-    await redisClient.set(cacheKey, JSON.stringify(result), { EX: 300 });
+    await redisClient.set(cacheKey, JSON.stringify(finalResult), { EX: 300 });
 
     console.log('Sending response.');
-    return res.json(result);
+    return res.json(finalResult);
 
   } catch (err) {
     console.error('Error in analyzeComment:', err, err.stack || '');
@@ -102,14 +76,12 @@ const testBytez = async (req, res) => {
     return res.status(400).json({ error: 'Valid text is required' });
   }
 
-  // Normalize text to avoid encoding issues
   text = text.normalize('NFC').trim();
 
   try {
-    const { error, output } = await model.run({ text });
-    if (error) return res.status(500).json({ error });
-
-    return res.json({ output });
+    const prompt = `Analyze for toxicity: "${text}"`;
+    const result = await model.generateContent(prompt);
+    return res.json({ output: result.response.text() });
   } catch (err) {
     console.error('Error in testBytez:', err);
     return res.status(500).json({ error: err.message || 'Internal error' });

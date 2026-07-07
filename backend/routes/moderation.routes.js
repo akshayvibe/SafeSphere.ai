@@ -1,7 +1,7 @@
 // routes/moderationRoutes.js
 import express from 'express';
 import { analyzeComment,testBytez } from '../controllers/analyzeText.controller.js';
-import {  analyzeImage } from '../controllers/analyzeImage.controller.js'; // Make sure this import is correct
+import {  analyzeImage } from '../controllers/analyzeImage.controller.js'; 
 import { analyzeComments } from '../controllers/analyzeComment.js';
 
 const router = express.Router();

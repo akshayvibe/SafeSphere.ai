@@ -4,6 +4,7 @@
   "main": "app.js",
   "type": "module",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@tensorflow-models/toxicity": "^1.2.2",
     "accepts": "^2.0.0",
     "asynckit": "^0.4.0",
@@ -11,7 +12,6 @@
     "body-parser": "^2.2.0",
     "bottleneck": "^2.19.5",
     "bytes": "^3.1.2",
-    "bytez.js": "^1.1.15",
     "call-bind-apply-helpers": "^1.0.2",
     "call-bound": "^1.0.4",
     "combined-stream": "^1.0.8",
