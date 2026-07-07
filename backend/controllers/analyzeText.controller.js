@@ -1,13 +1,13 @@
-import { GoogleGenAI } from '@google/genai';
+import axios from 'axios';
 import redisClient from '../redisClient.js';
 import crypto from 'crypto';
-import dotenv from 'dotenv'
+import dotenv from 'dotenv';
 
 dotenv.config({
-  path:'./.env'
-})
+  path: './.env'
+});
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const PERSPECTIVE_URL = 'https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze';
 
 const analyzeComment = async (req, res) => {
   let { text } = req.body;
@@ -31,33 +31,43 @@ const analyzeComment = async (req, res) => {
       return res.json(JSON.parse(cachedResult));
     }
 
-    console.log('Cache miss. Calling Gemini...');
+    console.log('Cache miss. Calling Perspective API...');
     
-    const prompt = `Analyze the following text for toxicity, harassment, and unsafe content. 
-Return a JSON object with:
-- "rating": a number from 1 to 10 (1 = completely safe, 10 = highly toxic)
-- "message": a brief explanation
-- "toxic": boolean (true if toxic, false otherwise)
-Text to analyze: "${text}"`;
+    // Perspective API request body
+    const requestData = {
+      comment: { text },
+      languages: ['en'],
+      requestedAttributes: {
+        TOXICITY: {},
+        SEVERE_TOXICITY: {},
+        IDENTITY_ATTACK: {},
+        INSULT: {},
+        PROFANITY: {},
+        THREAT: {}
+      }
+    };
 
-    const interaction = await ai.interactions.create({
-      model: 'gemini-3.5-flash',
-      input: prompt
-    });
+    const response = await axios.post(`${PERSPECTIVE_URL}?key=${process.env.PERSPECTIVE_API_KEY}`, requestData);
     
-    const responseText = interaction.output_text;
-    const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
-    let parsedData;
-    try {
-      parsedData = JSON.parse(jsonMatch[1].trim());
-    } catch (e) {
-      parsedData = { rating: 1, message: 'Content seems normal', toxic: false };
+    // Perspective returns scores from 0.0 to 1.0. We'll map the highest score to our 1-10 scale.
+    const attributeScores = response.data.attributeScores;
+    let maxScore = 0;
+    
+    for (const key in attributeScores) {
+      const score = attributeScores[key].summaryScore.value;
+      if (score > maxScore) maxScore = score;
     }
 
+    // Convert 0.0 - 1.0 to 1 - 10 rating
+    let rating = Math.round(maxScore * 10);
+    if (rating === 0) rating = 1; // Minimum rating of 1
+
+    const isToxic = rating > 7;
     const finalResult = {
-      rating: parsedData.rating || 1,
-      message: parsedData.message || (parsedData.rating > 7 ? 'Something fishy detected' : 'Content seems normal'),
-      output: parsedData,
+      rating: rating,
+      message: isToxic ? 'Potential toxicity detected by Perspective API' : 'Content seems normal',
+      toxic: isToxic,
+      output: response.data, // Attach raw perspective output for debugging
     };
 
     console.log('Caching result in Redis...');
@@ -67,32 +77,14 @@ Text to analyze: "${text}"`;
     return res.json(finalResult);
 
   } catch (err) {
-    console.error('Error in analyzeComment:', err, err.stack || '');
+    console.error('Error in analyzeComment (Perspective):', err.response?.data || err.message);
     return res.status(500).json({ error: (err && err.message) || 'Internal error' });
   }
 };
 
 const testBytez = async (req, res) => {
-  let { text } = req.body;
-
-  if (typeof text !== 'string' || !text.trim()) {
-    return res.status(400).json({ error: 'Valid text is required' });
-  }
-
-  text = text.normalize('NFC').trim();
-
-  try {
-    const prompt = `Analyze for toxicity: "${text}"`;
-    const interaction = await ai.interactions.create({
-      model: 'gemini-3.5-flash',
-      input: prompt
-    });
-    return res.json({ output: interaction.output_text });
-  } catch (err) {
-    console.error('Error in testBytez:', err);
-    return res.status(500).json({ error: err.message || 'Internal error' });
-  }
+  // Legacy test endpoint, can just return success or use perspective
+  return res.json({ output: "Test endpoint deprecated. Please use analyzeComment instead." });
 };
 
 export { analyzeComment, testBytez };
-

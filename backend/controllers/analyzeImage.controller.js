@@ -1,15 +1,10 @@
-// controllers/imageModerationController.js
 import axios from 'axios';
-import { GoogleGenAI } from '@google/genai';
-import dotenv from 'dotenv'
+import dotenv from 'dotenv';
+import FormData from 'form-data';
 
 dotenv.config({
-  path:'./.env'
-})
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-const THRESHOLD = 0.3;  // kept for compatibility if needed, though gemini returns distinct rating
+  path: './.env'
+});
 
 const analyzeImage = async (req, res) => {
   const { imageUrl } = req.body;
@@ -19,44 +14,64 @@ const analyzeImage = async (req, res) => {
   }
 
   try {
-    const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-    const mimeType = imageResponse.headers['content-type'] || 'image/jpeg';
-    const inlineData = {
-      data: Buffer.from(imageResponse.data).toString('base64'),
-      mimeType: mimeType
-    };
-
-    const prompt = `Analyze this image for nudity, violence, scam, gore, weapons, self-harm, and offensive content. 
-Return a JSON object with:
-- "rating": a number from 1 to 10 based on the severity of unsafe content (1 = completely safe, 10 = highly unsafe)
-- "contentTypes": an array of strings listing detected unsafe content (e.g., ["Nudity", "Violence"]). Empty array if none.
-- "message": a brief summary of what was detected, or "Image seems normal" if safe.`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: [
-        prompt,
-        { inlineData }
-      ]
+    // Sightengine API call for image moderation
+    const response = await axios.get('https://api.sightengine.com/1.0/check.json', {
+      params: {
+        'url': imageUrl,
+        'models': 'nudity-2.0,wad,offensive,scam,gore',
+        'api_user': process.env.SIGHTENGINE_API_USER,
+        'api_secret': process.env.SIGHTENGINE_API_SECRET
+      }
     });
+
+    const data = response.data;
     
-    const responseText = response.text;
-    const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
-    let parsedData;
-    try {
-      parsedData = JSON.parse(jsonMatch[1].trim());
-    } catch (e) {
-      parsedData = { rating: 1, contentTypes: [], message: 'Image seems normal' };
+    if (data.status !== 'success') {
+      console.error('Sightengine returned error:', data.error);
+      return res.status(500).json({ error: 'Image moderation failed (API error)' });
     }
 
+    // Map Sightengine output to our 1-10 rating scale
+    let maxProbability = 0;
+    const contentTypes = [];
+
+    // Nudity
+    if (data.nudity) {
+      const nudityProb = Object.values(data.nudity).reduce((a, b) => Math.max(a, b), 0);
+      if (nudityProb > maxProbability) maxProbability = nudityProb;
+      if (nudityProb > 0.3) contentTypes.push('Nudity');
+    }
+    // Weapons/Alcohol/Drugs (WAD)
+    if (data.weapon && data.weapon > maxProbability) maxProbability = data.weapon;
+    if (data.weapon > 0.3) contentTypes.push('Weapon');
+    if (data.alcohol && data.alcohol > maxProbability) maxProbability = data.alcohol;
+    if (data.alcohol > 0.3) contentTypes.push('Alcohol');
+    if (data.drugs && data.drugs > maxProbability) maxProbability = data.drugs;
+    if (data.drugs > 0.3) contentTypes.push('Drugs');
+    // Gore
+    if (data.gore) {
+      const goreProb = data.gore.prob;
+      if (goreProb > maxProbability) maxProbability = goreProb;
+      if (goreProb > 0.3) contentTypes.push('Gore');
+    }
+    // Offensive
+    if (data.offensive && data.offensive.prob > maxProbability) maxProbability = data.offensive.prob;
+    if (data.offensive?.prob > 0.3) contentTypes.push('Offensive');
+    // Scam
+    if (data.scam && data.scam.prob > maxProbability) maxProbability = data.scam.prob;
+    if (data.scam?.prob > 0.3) contentTypes.push('Scam');
+
+    let rating = Math.round(maxProbability * 10);
+    if (rating === 0) rating = 1;
+
     res.json({
-      rating: parsedData.rating || 1,
-      contentTypes: parsedData.contentTypes || [],
-      message: parsedData.message || (parsedData.rating > 7 ? 'Potential unsafe content detected' : 'Image seems normal'),
-      data: parsedData,
+      rating: rating,
+      contentTypes: contentTypes,
+      message: rating > 7 ? 'Potential unsafe content detected by Sightengine' : 'Image seems normal',
+      data: data,
     });
   } catch (error) {
-    console.error('Gemini API error:', error.response?.data || error.message);
+    console.error('Sightengine API error:', error.response?.data || error.message);
     res.status(500).json({ error: 'Image moderation failed' });
   }
 };

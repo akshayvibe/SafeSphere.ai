@@ -1,11 +1,11 @@
-import { GoogleGenAI } from '@google/genai';
+import axios from 'axios';
 import redisClient from '../redisClient.js';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const PERSPECTIVE_URL = 'https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze';
 
 export const analyzeComments = async (req, res) => {
   let { commentText } = req.body;
@@ -21,38 +21,48 @@ export const analyzeComments = async (req, res) => {
       return res.json(JSON.parse(cachedResult));
     }
     
-    const prompt = `Analyze the following comment for toxicity, harassment, and unsafe content. 
-Return a JSON object with:
-- "rating": a number from 1 to 10 (1 = completely safe, 10 = highly toxic)
-- "message": a brief explanation
-- "toxic": boolean (true if toxic, false otherwise)
-Text to analyze: "${commentText}"`;
+    // Perspective API request body
+    const requestData = {
+      comment: { text: commentText },
+      languages: ['en'],
+      requestedAttributes: {
+        TOXICITY: {},
+        SEVERE_TOXICITY: {},
+        IDENTITY_ATTACK: {},
+        INSULT: {},
+        PROFANITY: {},
+        THREAT: {}
+      }
+    };
 
-    const interaction = await ai.interactions.create({
-      model: 'gemini-3.5-flash',
-      input: prompt
-    });
+    const response = await axios.post(`${PERSPECTIVE_URL}?key=${process.env.PERSPECTIVE_API_KEY}`, requestData);
     
-    const responseText = interaction.output_text;
-    const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
-    let parsedData;
-    try {
-      parsedData = JSON.parse(jsonMatch[1].trim());
-    } catch (e) {
-      parsedData = { rating: 1, message: 'Content seems normal', toxic: false };
+    // Perspective returns scores from 0.0 to 1.0. We'll map the highest score to our 1-10 scale.
+    const attributeScores = response.data.attributeScores;
+    let maxScore = 0;
+    
+    for (const key in attributeScores) {
+      const score = attributeScores[key].summaryScore.value;
+      if (score > maxScore) maxScore = score;
     }
 
+    // Convert 0.0 - 1.0 to 1 - 10 rating
+    let rating = Math.round(maxScore * 10);
+    if (rating === 0) rating = 1;
+
+    const isToxic = rating > 7;
     const finalResult = {
-      rating: parsedData.rating || 1,
-      message: parsedData.message || (parsedData.rating > 7 ? 'Potential toxicity detected' : 'Comment seems normal'),
-      output: parsedData,
+      rating: rating,
+      message: isToxic ? 'Potential toxicity detected by Perspective API' : 'Comment seems normal',
+      toxic: isToxic,
+      output: response.data,
     };
 
     await redisClient.set(cacheKey, JSON.stringify(finalResult), { EX: 300 });
 
     return res.json(finalResult);
   } catch (err) {
-    console.error('Error in analyzeComment:', err);
+    console.error('Error in analyzeComment (Perspective):', err.response?.data || err.message);
     return res.status(500).json({ error: err.message || 'Internal error' });
   }
 };
