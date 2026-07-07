@@ -4,7 +4,7 @@
   "main": "app.js",
   "type": "module",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^2.10.0",
     "@tensorflow-models/toxicity": "^1.2.2",
     "accepts": "^2.0.0",
     "asynckit": "^0.4.0",

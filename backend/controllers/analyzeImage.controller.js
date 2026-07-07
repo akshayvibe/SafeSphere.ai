@@ -1,14 +1,13 @@
 // controllers/imageModerationController.js
 import axios from 'axios';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv'
 
 dotenv.config({
   path:'./.env'
 })
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const THRESHOLD = 0.3;  // kept for compatibility if needed, though gemini returns distinct rating
 
@@ -33,8 +32,15 @@ Return a JSON object with:
 - "contentTypes": an array of strings listing detected unsafe content (e.g., ["Nudity", "Violence"]). Empty array if none.
 - "message": a brief summary of what was detected, or "Image seems normal" if safe.`;
 
-    const result = await model.generateContent([prompt, { inlineData }]);
-    const responseText = result.response.text();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents: [
+        prompt,
+        { inlineData }
+      ]
+    });
+    
+    const responseText = response.text;
     const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
     let parsedData;
     try {

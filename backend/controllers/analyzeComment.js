@@ -1,9 +1,11 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import redisClient from '../redisClient.js';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+dotenv.config();
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export const analyzeComments = async (req, res) => {
   let { commentText } = req.body;
@@ -26,8 +28,12 @@ Return a JSON object with:
 - "toxic": boolean (true if toxic, false otherwise)
 Text to analyze: "${commentText}"`;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const interaction = await ai.interactions.create({
+      model: 'gemini-3.5-flash',
+      input: prompt
+    });
+    
+    const responseText = interaction.output_text;
     const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)```/) || [null, responseText];
     let parsedData;
     try {
