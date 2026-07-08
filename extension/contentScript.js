@@ -131,54 +131,87 @@ function isCacheValid(data) {
   return ageMs < 24 * 60 * 60 * 1000; // 1 day
 }
 
-async function moderateRow(row) {
-  const emailText = extractEmailText(row);
-  if (!emailText) return;
+async function moderateRowsBatch(rows) {
+  const itemsToScan = [];
+  for (const row of rows) {
+    if (row.querySelector('.toxicity-badge')) continue;
+    
+    const emailText = extractEmailText(row);
+    if (!emailText) continue;
 
-  // Client cache check
-  const cachedData = getCachedResult(emailText);
-  if (cachedData && isCacheValid(cachedData)) {
-    updateStatusIcon(row, cachedData.result.rating);
-    return;
+    const cachedData = getCachedResult(emailText);
+    if (cachedData && isCacheValid(cachedData)) {
+      updateStatusIcon(row, cachedData.result.rating);
+      continue;
+    }
+
+    let existingBadge = row.querySelector('.toxicity-badge');
+    if (existingBadge) existingBadge.remove();
+    const lastTd = row.querySelector('td:last-child');
+    if (lastTd) lastTd.appendChild(createLoadingBadge());
+
+    itemsToScan.push({ row, text: emailText });
   }
 
-  // Show loading badge
-  let existingBadge = row.querySelector('.toxicity-badge');
-  if (existingBadge) existingBadge.remove();
-  const lastTd = row.querySelector('td:last-child');
-  if (lastTd) lastTd.appendChild(createLoadingBadge());
+  if (itemsToScan.length === 0) return;
+
+  const texts = itemsToScan.map(item => item.text);
 
   try {
     const res = await fetch(MODERATION_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: emailText }),
+      body: JSON.stringify({ texts }),
     });
     if (!res.ok) {
       console.error('API response not OK:', res.status, await res.text());
+      // Apply error badge to prevent infinite retries
+      for (const item of itemsToScan) {
+        let existingBadge = item.row.querySelector('.toxicity-badge');
+        if (existingBadge) {
+          existingBadge.style.background = '#9e9e9e';
+          existingBadge.style.color = '#fff';
+          existingBadge.textContent = '❌ API Error';
+          existingBadge.title = 'Rate limit or API error';
+        }
+      }
       return;
     }
     const data = await res.json();
-    if (data.rating !== undefined) {
-      setCachedResult(emailText, data);
-      updateStatusIcon(row, data.rating);
+    if (data.results && Array.isArray(data.results)) {
+      for (let i = 0; i < data.results.length; i++) {
+        const item = itemsToScan[i];
+        const result = data.results[i];
+        if (result && result.rating !== undefined) {
+          setCachedResult(item.text, result);
+          updateStatusIcon(item.row, result.rating);
+        }
+      }
     }
   } catch (err) {
     console.error('Moderation API error:', err);
+    // Apply error badge to prevent infinite retries
+    for (const item of itemsToScan) {
+      let existingBadge = item.row.querySelector('.toxicity-badge');
+      if (existingBadge) {
+        existingBadge.style.background = '#9e9e9e';
+        existingBadge.style.color = '#fff';
+        existingBadge.textContent = '❌ API Error';
+        existingBadge.title = 'Rate limit or API error';
+      }
+    }
   }
 }
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
+let isScanning = false;
 async function scanInboxSequential() {
-  const rows = Array.from(document.querySelectorAll('tr.zA')).slice(0, 15);
-  for (const row of rows) {
-    if (!row.querySelector('.toxicity-badge')) {
-      await moderateRow(row);
-      await delay(500);
-    }
+  if (isScanning) return;
+  isScanning = true;
+  try {
+    const rows = Array.from(document.querySelectorAll('tr.zA')).slice(0, 5);
+    await moderateRowsBatch(rows);
+  } finally {
+    isScanning = false;
   }
 }
 

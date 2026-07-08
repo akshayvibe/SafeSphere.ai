@@ -82,14 +82,13 @@ button:hover {
 } */
 body {
   font-family: 'Segoe UI', Arial, sans-serif;
-  background: linear-gradient(135deg, #232526, #414345);
-  color: #e0e0e0;
+  background: #f8f9fa;
+  color: #333333;
   margin: 0;
   padding: 18px 22px;
   width: 320px;
   min-height: 320px;
   user-select: none;
-  letter-spacing: 0.03em;
 }
 
 .popup-container {
@@ -103,9 +102,9 @@ body {
   height: 26px;
   vertical-align: middle;
   margin-right: 7px;
-  background: #00BFA5;
+  background: #007bff;
   border-radius: 50%;
-  box-shadow: 0 0 8px #00BFA5;
+  box-shadow: 0 0 4px rgba(0, 123, 255, 0.4);
 }
 
 .shield-emoji {
@@ -121,7 +120,7 @@ body {
 .image-moderation-status-icon {
   vertical-align: middle;
   cursor: default;
-  box-shadow: 0 2px 6px rgba(0, 150, 136, 0.25);
+  box-shadow: 0 2px 6px rgba(0, 123, 255, 0.25);
   border-radius: 50%;
   width: 18px;
   height: 18px;
@@ -136,54 +135,47 @@ body {
 h1 {
   font-size: 23px;
   margin-bottom: 10px;
-  color: #18ffff;
-  font-weight: 900;
-  letter-spacing: 0.04em;
+  color: #222222;
+  font-weight: 600;
 }
 
 p {
-  font-size: 15px;
+  font-size: 14px;
   margin-bottom: 24px;
-  color: #b2dfdb;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+  color: #666666;
 }
 
 button {
   width: 90%;
-  background: linear-gradient(90deg, #00bfa5 0%, #009688 100%);
+  background: #007bff;
   border: none;
   color: white;
   padding: 13px 0;
-  font-size: 16px;
+  font-size: 15px;
   border-radius: 6px;
   cursor: pointer;
-  margin: 11px 0;
-  transition: background 0.24s, box-shadow 0.23s;
-  font-weight: 600;
-  box-shadow: 0 4px 10px rgba(0, 191, 165, 0.20);
+  margin: 8px 0;
+  transition: background 0.2s, box-shadow 0.2s;
+  font-weight: 500;
   outline: none;
 }
 
 button:focus {
-  box-shadow: 0 0 0 2px #00bfa5;
+  box-shadow: 0 0 0 2px #0056b3;
 }
 
 button:hover {
-  background: linear-gradient(90deg, #009688 0%, #00bfa5 100%);
-  box-shadow: 0 6px 14px rgba(0, 191, 165, 0.25);
+  background: #0069d9;
 }
 
 #statusMessage {
   margin-top: 24px;
-  font-size: 15.5px;
-  font-weight: bold;
+  font-size: 14px;
   min-height: 28px;
-  color: #80cbc4;
-  background: rgba(30, 34, 36, 0.55);
+  color: #495057;
+  background: #e9ecef;
   border-radius: 6px;
-  padding: 6px 8px;
-  box-shadow: 0 1px 6px rgba(0, 191, 165, 0.11);
+  padding: 8px;
   user-select: text;
   word-break: break-word;
 }

@@ -1,9 +1,15 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
-import FormData from 'form-data';
+import Bottleneck from 'bottleneck';
+import logger from '../logger.js';
 
 dotenv.config({
   path: './.env'
+});
+
+const limiter = new Bottleneck({
+  maxConcurrent: 2,
+  minTime: 333
 });
 
 const analyzeImage = async (req, res) => {
@@ -14,64 +20,53 @@ const analyzeImage = async (req, res) => {
   }
 
   try {
-    // Sightengine API call for image moderation
-    const response = await axios.get('https://api.sightengine.com/1.0/check.json', {
+    const response = await limiter.schedule(() => axios.get('https://api.sightengine.com/1.0/check.json', {
       params: {
         'url': imageUrl,
-        'models': 'nudity-2.0,wad,offensive,scam,gore',
+        'models': 'nudity-2.0,wad,offensive,text-content,gore,tobacco,violence,self-harm',
         'api_user': process.env.SIGHTENGINE_API_USER,
         'api_secret': process.env.SIGHTENGINE_API_SECRET
       }
-    });
+    }));
 
-    const data = response.data;
-    
-    if (data.status !== 'success') {
-      console.error('Sightengine returned error:', data.error);
-      return res.status(500).json({ error: 'Image moderation failed (API error)' });
-    }
-
-    // Map Sightengine output to our 1-10 rating scale
-    let maxProbability = 0;
+    const result = response.data;
+    let flagged = false;
+    let maxScore = 0;
     const contentTypes = [];
 
-    // Nudity
-    if (data.nudity) {
-      const nudityProb = Object.values(data.nudity).reduce((a, b) => Math.max(a, b), 0);
-      if (nudityProb > maxProbability) maxProbability = nudityProb;
-      if (nudityProb > 0.3) contentTypes.push('Nudity');
+    // Analyze nudity
+    if (result.nudity) {
+      const nudityScore = Math.max(result.nudity.suggestive || 0, result.nudity.erotica || 0, result.nudity.sexual_activity || 0);
+      if (nudityScore > 0.5) {
+        flagged = true;
+        contentTypes.push('Nudity');
+        maxScore = Math.max(maxScore, nudityScore);
+      }
     }
-    // Weapons/Alcohol/Drugs (WAD)
-    if (data.weapon && data.weapon > maxProbability) maxProbability = data.weapon;
-    if (data.weapon > 0.3) contentTypes.push('Weapon');
-    if (data.alcohol && data.alcohol > maxProbability) maxProbability = data.alcohol;
-    if (data.alcohol > 0.3) contentTypes.push('Alcohol');
-    if (data.drugs && data.drugs > maxProbability) maxProbability = data.drugs;
-    if (data.drugs > 0.3) contentTypes.push('Drugs');
-    // Gore
-    if (data.gore) {
-      const goreProb = data.gore.prob;
-      if (goreProb > maxProbability) maxProbability = goreProb;
-      if (goreProb > 0.3) contentTypes.push('Gore');
-    }
-    // Offensive
-    if (data.offensive && data.offensive.prob > maxProbability) maxProbability = data.offensive.prob;
-    if (data.offensive?.prob > 0.3) contentTypes.push('Offensive');
-    // Scam
-    if (data.scam && data.scam.prob > maxProbability) maxProbability = data.scam.prob;
-    if (data.scam?.prob > 0.3) contentTypes.push('Scam');
+    
+    // Analyze weapons, alcohol, drugs
+    if (result.weapon > 0.5) { flagged = true; contentTypes.push('Weapon'); maxScore = Math.max(maxScore, result.weapon); }
+    if (result.alcohol > 0.5) { flagged = true; contentTypes.push('Alcohol'); maxScore = Math.max(maxScore, result.alcohol); }
+    if (result.drugs > 0.5) { flagged = true; contentTypes.push('Drugs'); maxScore = Math.max(maxScore, result.drugs); }
+    
+    // Analyze violence/gore
+    if (result.violence && result.violence.prob > 0.5) { flagged = true; contentTypes.push('Violence'); maxScore = Math.max(maxScore, result.violence.prob); }
+    if (result.gore && result.gore.prob > 0.5) { flagged = true; contentTypes.push('Gore'); maxScore = Math.max(maxScore, result.gore.prob); }
+    
+    // Analyze offensive
+    if (result.offensive && result.offensive.prob > 0.5) { flagged = true; contentTypes.push('Offensive'); maxScore = Math.max(maxScore, result.offensive.prob); }
 
-    let rating = Math.round(maxProbability * 10);
+    let rating = flagged ? Math.round(maxScore * 10) : 1;
     if (rating === 0) rating = 1;
 
     res.json({
       rating: rating,
       contentTypes: contentTypes,
-      message: rating > 7 ? 'Potential unsafe content detected by Sightengine' : 'Image seems normal',
-      data: data,
+      message: flagged ? 'Potential unsafe content detected by Sightengine' : 'Image seems normal',
+      data: result,
     });
   } catch (error) {
-    console.error('Sightengine API error:', error.response?.data || error.message);
+    logger.error(`Sightengine API error: ${error.message}`);
     res.status(500).json({ error: 'Image moderation failed' });
   }
 };
